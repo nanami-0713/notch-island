@@ -10,6 +10,10 @@
 > 左：收起态——专辑封面 + 随音乐律动的声纹（颜色取自封面主色调）；
 > 右：展开态——真封面、歌名/歌手、进度条、播放控制、逐行同步歌词。
 
+## 直接下载
+
+不想自己编译？去 [Releases](https://github.com/nanami-0713/notch-island/releases/latest) 下载打包好的 `NotchIsland-vX.zip`，解压拖进「应用程序」即可。首次打开被 Gatekeeper 拦截属正常（未公证）：系统设置 → 隐私与安全性 → 「仍要打开」，或 `xattr -cr /Applications/NotchIsland.app`。详细安装步骤见 Release 说明。
+
 ## 致谢与参考
 
 - 本项目的交互设计参考了知名 macOS 灵动岛软件 **[Alcove](https://tryalcove.com/)**（付费、闭源）：刘海贴边布局、悬停展开、媒体 HUD、文件暂存等交互均以其为蓝本自行实现，未使用其任何代码与资源。
