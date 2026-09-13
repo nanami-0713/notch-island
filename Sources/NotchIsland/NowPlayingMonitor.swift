@@ -26,11 +26,12 @@ final class NowPlayingMonitor {
         var script: NSAppleScript?
     }
 
+    /// AppleScript 兜底支持的播放器：装了且在运行才会被轮询。
+    /// 酷狗（正式版/概念版）无 AppleScript 词典，不进此列表——其信息走 MediaRemote 助手，控制走模拟媒体键
     private static let supportedApps: [(bundleID: String, displayName: String)] = [
         ("com.apple.Music", "Music"),
         ("com.spotify.client", "Spotify"),
         ("com.netease.163music", "网易云音乐"),
-        ("com.kugou.kgyouth", "酷狗音乐"),
         ("com.tencent.QQMusicMac", "QQ音乐"),
     ]
 
@@ -38,12 +39,14 @@ final class NowPlayingMonitor {
         "com.apple.Music": "Music",
         "com.spotify.client": "Spotify",
         "com.netease.163music": "网易云音乐",
-        "com.kugou.kgyouth": "酷狗音乐",
+        "com.kugou.mac.Music": "酷狗音乐",
+        "com.kugou.kgyouth": "酷狗音乐(概念版)",
         "com.tencent.QQMusicMac": "QQ音乐",
     ]
 
     private var timer: Timer?
     private var tickCount = 0
+    private var rawLogCount = 0
     private var helperAvailable = true
     private var helperFailures = 0
     private var musicApps: [MusicApp] = []
@@ -152,9 +155,13 @@ final class NowPlayingMonitor {
 
     private func fetchGet() {
         guard helperFilesExist else {
+            IslandController.debugLog("helper files missing: perl=\(helperPerl) fw=\(helperFramework)")
             helperAvailable = false
             pollAppleScript()
             return
+        }
+        if rawLogCount == 0 {
+            IslandController.debugLog("fetchGet spawn perl=\(helperPerl) fw=\(helperFramework)")
         }
 
         let process = Process()
@@ -163,11 +170,35 @@ final class NowPlayingMonitor {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
+
+        // 输出含 base64 封面（150KB+）会超过 64KB 管道缓冲：
+        // 必须并发读取，"等进程退出再读"会与子进程互相等待死锁
+        let bufferLock = NSLock()
+        let buffer = NSMutableData()
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
+            bufferLock.lock()
+            buffer.append(chunk)
+            bufferLock.unlock()
+        }
+
+        var finished = false
         process.terminationHandler = { [weak self] _ in
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            pipe.fileHandleForReading.readabilityHandler = nil
+            let rest = pipe.fileHandleForReading.readDataToEndOfFile()
+            bufferLock.lock()
+            buffer.append(rest)
+            let output = buffer as Data
+            bufferLock.unlock()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    self?.handleGetOutput(data)
+                    guard let self, !finished else { return }
+                    finished = true
+                    self.handleGetOutput(output)
                 }
             }
         }
@@ -175,12 +206,31 @@ final class NowPlayingMonitor {
             try process.run()
         } catch {
             helperFail(handleError: error.localizedDescription)
+            return
+        }
+        // 兜底：助手 10 秒未退出视为挂起（XPC 无响应等），杀掉按失败计
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10) { [weak process, weak self] in
+            guard let process, process.isRunning else { return }
+            process.terminate()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, !finished else { return }
+                    finished = true
+                    self.helperFail(handleError: "get timed out after 10s")
+                }
+            }
         }
     }
 
     private func handleGetOutput(_ data: Data) {
-        guard let line = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty else {
+        let line = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // 临时诊断：前 15 次轮询落盘原始输出
+        rawLogCount += 1
+        if rawLogCount <= 15 {
+            IslandController.debugLog("get raw[\(rawLogCount)]: \(String(line.prefix(150)))")
+        }
+        guard !line.isEmpty else {
             helperFail(handleError: "empty output")
             return
         }

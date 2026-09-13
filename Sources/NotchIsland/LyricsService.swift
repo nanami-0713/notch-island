@@ -56,8 +56,16 @@ final class LyricsService {
             lyricRequest.timeoutInterval = 6
             URLSession.shared.dataTask(with: lyricRequest) { [weak self] lyricData, _, _ in
                 guard let self, let lyricData,
-                      let lyricJSON = try? JSONSerialization.jsonObject(with: lyricData) as? [String: Any],
-                      let lrc = lyricJSON["lrc"] as? [String: Any],
+                      let lyricJSON = try? JSONSerialization.jsonObject(with: lyricData) as? [String: Any] else {
+                    DispatchQueue.main.async { completion?() }
+                    return
+                }
+                // 接口异常（如 408 超时）时可能返回伪 LRC（内容是错误文案），直接丢弃
+                if let code = lyricJSON["code"] as? Int, code != 200 {
+                    DispatchQueue.main.async { completion?() }
+                    return
+                }
+                guard let lrc = lyricJSON["lrc"] as? [String: Any],
                       let lrcText = lrc["lyric"] as? String else {
                     DispatchQueue.main.async { completion?() }
                     return
