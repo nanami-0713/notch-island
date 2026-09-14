@@ -11,11 +11,16 @@ final class LyricsService {
     private var cache: [String: [LyricLine]] = [:]
     private(set) var lines: [LyricLine] = []
     private(set) var loadedKey: String?
+    /// 请求代际：快速连续切歌时，只有最新一代的响应才允许写入，
+    /// 防止慢速的旧响应把上一首的歌词写回来
+    private var requestGeneration = 0
 
     func loadIfNeeded(title: String, artist: String, completion: (() -> Void)? = nil) {
         let key = "\(title)|\(artist)"
         guard loadedKey != key else { return }
         loadedKey = key
+        requestGeneration += 1
+        let generation = requestGeneration
         if let cached = cache[key] {
             lines = cached
             completion?()
@@ -34,7 +39,7 @@ final class LyricsService {
         searchRequest.timeoutInterval = 6
 
         URLSession.shared.dataTask(with: searchRequest) { [weak self] data, _, _ in
-            guard let self, let data,
+            guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let result = json["result"] as? [String: Any],
                   let songs = result["songs"] as? [[String: Any]], !songs.isEmpty else {
@@ -55,28 +60,30 @@ final class LyricsService {
             lyricRequest.setValue("music.163.com", forHTTPHeaderField: "Referer")
             lyricRequest.timeoutInterval = 6
             URLSession.shared.dataTask(with: lyricRequest) { [weak self] lyricData, _, _ in
-                guard let self, let lyricData,
-                      let lyricJSON = try? JSONSerialization.jsonObject(with: lyricData) as? [String: Any] else {
-                    DispatchQueue.main.async { completion?() }
-                    return
-                }
-                // 接口异常（如 408 超时）时可能返回伪 LRC（内容是错误文案），直接丢弃
-                if let code = lyricJSON["code"] as? Int, code != 200 {
-                    DispatchQueue.main.async { completion?() }
-                    return
-                }
-                guard let lrc = lyricJSON["lrc"] as? [String: Any],
-                      let lrcText = lrc["lyric"] as? String else {
-                    DispatchQueue.main.async { completion?() }
-                    return
-                }
-                let parsed = Self.parseLRC(lrcText)
                 DispatchQueue.main.async {
+                    // 响应回来时若已切到更新的歌，本次结果整个作废（不写 lines，缓存也不留）
+                    guard let self, self.requestGeneration == generation else {
+                        completion?()
+                        return
+                    }
+                    defer { completion?() }
+                    guard let lyricData,
+                          let lyricJSON = try? JSONSerialization.jsonObject(with: lyricData) as? [String: Any] else {
+                        return
+                    }
+                    // 接口异常（如 408 超时）时可能返回伪 LRC（内容是错误文案），直接丢弃
+                    if let code = lyricJSON["code"] as? Int, code != 200 {
+                        return
+                    }
+                    guard let lrc = lyricJSON["lrc"] as? [String: Any],
+                          let lrcText = lrc["lyric"] as? String else {
+                        return
+                    }
+                    let parsed = Self.parseLRC(lrcText)
                     self.cache[key] = parsed
                     if self.loadedKey == key {
                         self.lines = parsed
                     }
-                    completion?()
                 }
             }.resume()
         }.resume()
