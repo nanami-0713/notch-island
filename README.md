@@ -3,8 +3,11 @@
 把 MacBook 的刘海变成 iPhone 式灵动岛的 macOS 菜单栏应用。原生 Swift + AppKit + SwiftUI，无第三方依赖，单可执行文件 + 一个媒体信息助手。
 
 <p align="center">
-  <img src="assets/collapsed.png" width="420" alt="收起态：封面 + 动态声纹" />
-  <img src="assets/expanded.png" width="420" alt="展开态：歌名/歌手/进度/控制/同步歌词" />
+  <img src="assets/demo.gif" width="640" alt="演示：收起态封面+声纹，点击展开弹簧动画，完整播放卡片" />
+</p>
+<p align="center">
+  <img src="assets/collapsed.png" width="360" alt="收起态：封面 + 动态声纹" />
+  <img src="assets/expanded.png" width="360" alt="展开态：歌名/歌手/进度/控制/同步歌词" />
 </p>
 
 > 左：收起态——专辑封面 + 随音乐律动的声纹（颜色取自封面主色调）；
