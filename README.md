@@ -15,7 +15,7 @@
 
 ## 直接下载
 
-不想自己编译？去 [Releases](https://github.com/nanami-0713/notch-island/releases/latest) 下载打包好的 `NotchIsland-vX.zip`，解压拖进「应用程序」即可。首次打开被 Gatekeeper 拦截属正常（未公证）：系统设置 → 隐私与安全性 → 「仍要打开」，或 `xattr -cr /Applications/NotchIsland.app`。详细安装步骤见 Release 说明。
+不想自己编译？去 [Releases](https://github.com/nanami-0713/notch-island/releases/latest) 下载打包好的 `NotchIsland-vX.zip`，解压拖进「应用程序」即可（当前 **v0.2.0**：新增耳机连接电量动画，修复歌词错位与媒体管道死锁，兼容酷狗正式版）。首次打开被 Gatekeeper 拦截属正常（未公证）：系统设置 → 隐私与安全性 → 「仍要打开」，或 `xattr -cr /Applications/NotchIsland.app`。详细安装步骤见 Release 说明。
 
 ## 致谢与参考
 
