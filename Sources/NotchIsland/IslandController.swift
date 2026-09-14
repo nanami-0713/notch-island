@@ -36,6 +36,7 @@ final class IslandController: NSObject, NSMenuDelegate {
     private let volumeWatcher = VolumeWatcher()
     private let mediaKeyTap = MediaKeyTap()
     private let lyrics = LyricsService()
+    private let headphones = HeadphoneWatcher()
     private var lyricsKey: String?
     private var mediaKeyTapRetryTick = 0
     private var brightnessNilReads = 0
@@ -123,6 +124,19 @@ final class IslandController: NSObject, NSMenuDelegate {
             }
         }
         volumeWatcher.start()
+
+        // 耳机连接动画：连上弹「🎧 + 电量」，断开弹提示
+        headphones.onConnected = { [weak self] snapshot in
+            self?.showHeadphoneToast(snapshot: snapshot, connected: true)
+        }
+        headphones.onDisconnected = { [weak self] name in
+            self?.showToast(Activity(
+                kind: .headphone,
+                text: "\(name) 已断开",
+                until: Date().addingTimeInterval(3)
+            ))
+        }
+        headphones.start()
 
         // 有辅助功能权限就拦截媒体键、隐藏系统自带 HUD；没权限则每 5 秒静默重试（授权后自动生效）
         mediaKeyTap.onKey = { [weak self] key in
@@ -475,6 +489,21 @@ final class IslandController: NSObject, NSMenuDelegate {
             text: muted ? "已静音" : "\(Int((volume * 100).rounded()))%",
             until: Date().addingTimeInterval(1.6),
             level: muted ? 0 : Double(volume)
+        ))
+    }
+
+    private func showHeadphoneToast(snapshot: HeadphoneWatcher.Snapshot, connected: Bool) {
+        let batteryText: String
+        if let percent = snapshot.percent {
+            batteryText = " \(percent)%"
+        } else {
+            batteryText = ""
+        }
+        showToast(Activity(
+            kind: .headphone,
+            text: "\(snapshot.name)\(batteryText)",
+            until: Date().addingTimeInterval(5),
+            batteryPercent: snapshot.percent
         ))
     }
 

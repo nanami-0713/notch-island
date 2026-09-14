@@ -112,8 +112,24 @@ struct IslandView: View {
 
     private func activityRow(_ activity: Activity) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: activity.symbol)
-                .font(.system(size: 11, weight: .semibold))
+            if activity.kind == .headphone, let percent = activity.batteryPercent {
+                // 耳机电量环：绿>50 橙21~50 红≤20，环心戴耳机图标
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.18), lineWidth: 2.5)
+                    Circle()
+                        .trim(from: 0, to: max(0.03, Double(percent) / 100))
+                        .stroke(ringColor(percent), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    Image(systemName: "headphones")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.white)
+                }
+                .frame(width: 22, height: 22)
+            } else {
+                Image(systemName: activity.symbol)
+                    .font(.system(size: 11, weight: .semibold))
+            }
             Text(activity.text)
                 .font(.system(size: 12, weight: .medium))
                 .lineLimit(1)
@@ -130,6 +146,14 @@ struct IslandView: View {
             }
         }
         .foregroundStyle(Color.white.opacity(0.75))
+    }
+
+    private func ringColor(_ percent: Int) -> Color {
+        switch percent {
+        case 51...: return .green
+        case 21...50: return .orange
+        default: return .red
+        }
     }
 
     private var stashCard: some View {

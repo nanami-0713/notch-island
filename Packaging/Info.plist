@@ -30,5 +30,7 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>读取并控制正在播放的音乐（Music / Spotify）。拒绝后灵动岛仍可用，但音乐卡片不会显示。</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>检测耳机连接并显示耳机电量。拒绝后灵动岛仍可用，但连接耳机时不会显示电量动画。</string>
 </dict>
 </plist>

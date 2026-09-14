@@ -26,19 +26,22 @@ struct NowPlaying: Equatable {
 
 struct Activity: Equatable {
     enum Kind {
-        case clipboard, battery, timerDone, volume, brightness
+        case clipboard, battery, timerDone, volume, brightness, headphone
     }
 
     var kind: Kind
     var text: String
     var until: Date
     var level: Double?
+    /// 耳机电量百分比（headphone 专用，渲染电环）
+    var batteryPercent: Int?
 
-    init(kind: Kind, text: String, until: Date, level: Double? = nil) {
+    init(kind: Kind, text: String, until: Date, level: Double? = nil, batteryPercent: Int? = nil) {
         self.kind = kind
         self.text = text
         self.until = until
         self.level = level
+        self.batteryPercent = batteryPercent
     }
 
     var symbol: String {
@@ -48,6 +51,7 @@ struct Activity: Equatable {
         case .timerDone: return "checkmark.circle.fill"
         case .volume: return "speaker.wave.2.fill"
         case .brightness: return "sun.max.fill"
+        case .headphone: return "headphones"
         }
     }
 }
