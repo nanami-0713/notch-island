@@ -44,6 +44,9 @@ cp "vendor/mediaremote-adapter/bin/mediaremote-adapter.pl" "$MRA_OUT/"
 if [ -f "Packaging/AppIcon.icns" ]; then
   cp "Packaging/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 fi
+
+# Agent 状态岛：桥脚本随包分发（菜单「安装 ZCode 状态桥」直接可用）
+cp "scripts/agent-hook.sh" "scripts/install-agent-hook.sh" "$APP/Contents/Resources/"
 codesign --force --sign "NotchIsland Dev" "$MRA_OUT/MediaRemoteAdapter.framework/MediaRemoteAdapter" 2>/dev/null \
   || codesign --force --sign - "$MRA_OUT/MediaRemoteAdapter.framework/MediaRemoteAdapter"
 if ! codesign --force --sign "NotchIsland Dev" "$APP" 2>/tmp/codesign_err.txt; then

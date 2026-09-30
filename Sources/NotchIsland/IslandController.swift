@@ -37,6 +37,7 @@ final class IslandController: NSObject, NSMenuDelegate {
     private let mediaKeyTap = MediaKeyTap()
     private let lyrics = LyricsService()
     private let headphones = HeadphoneWatcher()
+    private let agentStore = AgentEventStore()
     private var lyricsKey: String?
     private var mediaKeyTapRetryTick = 0
     private var brightnessNilReads = 0
@@ -46,6 +47,12 @@ final class IslandController: NSObject, NSMenuDelegate {
     private var showLyrics: Bool {
         get { UserDefaults.standard.object(forKey: "showLyrics") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "showLyrics") }
+    }
+
+    /// Agent 状态岛开关（默认开；桥没装时岛自然空白，零成本）
+    private var agentEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "showAgentStatus") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "showAgentStatus") }
     }
     private var lastBrightness: Double?
     private var brightnessInvalidReads = 0
@@ -60,6 +67,8 @@ final class IslandController: NSObject, NSMenuDelegate {
     private var targetW: CGFloat = 0
     private var targetH: CGFloat = 0
     private var lastFrameTimestamp: TimeInterval = 0
+    /// 专注开始的"弹出"进行中：弹簧接近弹出目标时拉回真实目标（见 bounce/springStep）
+    private var popActive = false
 
     init(geometry: ScreenGeometry) {
         let win = Self.makeWindow()
@@ -85,6 +94,17 @@ final class IslandController: NSObject, NSMenuDelegate {
         lastPasteboardCount = NSPasteboard.general.changeCount
         state.stashed = stash.files
         music.onUpdate = { [weak self] _ in self?.refreshLayout() }
+        if agentEnabled {
+            startAgentStore()
+        }
+    }
+
+    private func startAgentStore() {
+        agentStore.start { [weak self] sessions in
+            guard let self else { return }
+            self.state.agentSessions = sessions
+            self.refreshLayout()
+        }
     }
 
     private static func makeWindow() -> IslandWindow {
@@ -176,6 +196,7 @@ final class IslandController: NSObject, NSMenuDelegate {
         stopSpring()
         mediaKeyTap.stop()
         music.shutdown()
+        agentStore.stop()
         UserDefaults.standard.set(false, forKey: "mediaKeyTapActive")
         tickTimer?.invalidate()
         tickTimer = nil
@@ -194,6 +215,9 @@ final class IslandController: NSObject, NSMenuDelegate {
     /// 窗口形变用逐帧弹簧驱动：可中断、可重定目标，
     /// 且渲染宽度钳制在不小于"刘海宽 + 边距"，任何时刻都不会露出物理刘海
     private func animate(to target: NSRect) {
+        // 弹出进行中目标由 bounce 独占：专注计时每 0.5s 的 refreshLayout 会把
+        // 弹出目标立刻改写回真实值，弹出从未发生（实测曲线峰值被封在 327）——屏蔽之
+        if popActive { return }
         let springIdle = springTimer == nil
         if springIdle, currentW != 0,
            abs(target.width - currentW) < 0.5, abs(target.height - currentH) < 0.5 {
@@ -249,6 +273,12 @@ final class IslandController: NSObject, NSMenuDelegate {
         currentW += velocityW * dtc
         currentH += velocityH * dtc
 
+        // 弹出阶段：接近弹出目标即拉回真实目标，形成"弹出→回落"的确定幅度一跳
+        if popActive, currentW >= targetW - 6 {
+            popActive = false
+            refreshLayout()
+        }
+
         let settled = abs(targetW - currentW) < 0.5 && abs(velocityW) < 2
             && abs(targetH - currentH) < 0.5 && abs(velocityH) < 2
         if settled {
@@ -293,7 +323,7 @@ final class IslandController: NSObject, NSMenuDelegate {
                 sections += 1
             }
             if state.timerDeadline != nil {
-                content += 36
+                content += 52  // 环形进度 48 + 呼吸空间
                 sections += 1
             }
             if state.music != nil {
@@ -302,6 +332,12 @@ final class IslandController: NSObject, NSMenuDelegate {
             }
             if showLyrics && state.music != nil && state.lyricLine != nil {
                 content += 24
+            }
+            if !state.agentSessions.isEmpty {
+                // 标题行 18 + 间距 8 + 每行约 22 + 溢出页脚 14
+                content += 18 + 8 + CGFloat(min(3, state.agentSessions.count)) * 22
+                if state.agentSessions.count > 3 { content += 14 }
+                sections += 1
             }
             if !state.stashed.isEmpty {
                 content += 26 + 8 + CGFloat(min(4, state.stashed.count)) * 26
@@ -325,11 +361,32 @@ final class IslandController: NSObject, NSMenuDelegate {
         let leftExtent: CGFloat
         let rightExtent: CGFloat
         if let ext {
-            leftExtent = sideGap + 14 + edgeMargin
-            rightExtent = sideGap + ext.textWidth + edgeMargin
+            // 左右对称：两翼等宽（取两侧内容较大者 + 边距），文字超长已在 extensionContent 截断
+            if ext.progress != nil {
+                // 专注模式：最左「月亮+倒计时」、右侧迷你环形进度，两翼取较大内容等宽
+                let sideW = max(sideGap + 12 + 5 + ext.textWidth + edgeMargin,
+                                sideGap + 16 + edgeMargin)
+                leftExtent = sideW
+                rightExtent = sideW
+            } else {
+                let sideW = max(14, ext.textWidth) + sideGap + edgeMargin
+                leftExtent = sideW
+                rightExtent = sideW
+            }
         } else if state.music != nil {
+            // 音乐：左右翼精确镜像（各 8 + 22 + 8），岛体居中、双翼对称
             leftExtent = sideGap + 22 + 8
-            rightExtent = sideGap + 26 + 10
+            rightExtent = sideGap + 22 + 8
+        } else if !state.agentSessions.isEmpty,
+                  let primary = AgentSession.primary(of: state.agentSessions) {
+            // Agent：左翼符号+项目名、右翼呼吸点+时长，双翼取较大内容等宽（音乐岛同构）
+            let project = Self.clampText(primary.project, maxWidth: 64)
+            let timeText = AgentCollapsedRow.format(primary.elapsed)
+            let left = 11 + 5 + Self.textWidth(project)                    // 符号 + 间距 + 项目名
+            let right = 19 + 6 + Self.textWidth(timeText)                  // 三呼吸点 19pt + 间距 + 时长
+            let sideW = max(left, right) + sideGap + edgeMargin
+            leftExtent = sideW
+            rightExtent = sideW
         } else {
             leftExtent = edgeMargin
             rightExtent = edgeMargin
@@ -349,18 +406,35 @@ final class IslandController: NSObject, NSMenuDelegate {
     private func extensionContent() -> IslandExtension? {
         if state.expanded { return nil }
         if let deadline = state.timerDeadline {
-            let text = Self.formatCountdown(max(0, deadline.timeIntervalSinceNow))
-            return IslandExtension(symbol: "timer", text: text, textWidth: Self.textWidth(text))
+            let remain = max(0, deadline.timeIntervalSinceNow)
+            let text = Self.formatCountdown(remain)
+            let progress = state.timerTotal > 0 ? 1 - remain / state.timerTotal : 0
+            return IslandExtension(symbol: "timer", text: text, textWidth: Self.textWidth(text),
+                                   progress: min(max(progress, 0), 1))
         }
         if let activity = state.activity, activity.until > Date() {
-            return IslandExtension(symbol: activity.symbol, text: activity.text, textWidth: Self.textWidth(activity.text))
+            let text = Self.clampText(activity.text)
+            return IslandExtension(symbol: activity.symbol, text: text, textWidth: Self.textWidth(text))
         }
         if !state.stashed.isEmpty {
-            let text = "\(state.stashed.count) 个文件"
+            let text = Self.clampText("\(state.stashed.count) 个文件")
             return IslandExtension(symbol: "tray.full.fill", text: text, textWidth: Self.textWidth(text))
         }
         // 音乐收起态改用「封面 + 声纹」视图，不再用文字
         return nil
+    }
+
+    /// 收起态文字翼上限 64pt：双翼对称布局下文字过长会把岛撑得过宽，超长截断加省略号
+    private static func clampText(_ text: String, maxWidth: CGFloat = 64) -> String {
+        func width(_ s: String) -> CGFloat { textWidth(s) }
+        guard width(text) > maxWidth else { return text }
+        var count = text.count
+        while count > 1 {
+            let candidate = String(text.prefix(count - 1)) + "…"
+            if width(candidate) <= maxWidth { return candidate }
+            count -= 1
+        }
+        return "…"
     }
 
     private static func textWidth(_ text: String) -> CGFloat {
@@ -380,6 +454,9 @@ final class IslandController: NSObject, NSMenuDelegate {
         if tickCount <= 3 {
             Self.debugLog("tick #\(tickCount)")
         }
+        // 状态项窗口与岛体同层（layer 25），系统重排后可能压到岛体上方、盖住封面/声纹，
+        // 每拍把岛体重新提到同级最前
+        window.orderFrontRegardless()
         if let activity = state.activity, activity.until <= Date() {
             state.activity = nil
             refreshLayout()
@@ -416,6 +493,11 @@ final class IslandController: NSObject, NSMenuDelegate {
                 state.timerRemaining = remain
                 refreshLayout()
             }
+        }
+
+        // Agent 岛的时长每拍重算（EventSession.elapsed 是派生值）；空列表时跳过省一次对象图发布
+        if agentEnabled, !agentStore.sessions.isEmpty {
+            state.agentSessions = agentStore.displayedSessions()
         }
 
         if let estimate = music.currentEstimate() {
@@ -638,12 +720,49 @@ final class IslandController: NSObject, NSMenuDelegate {
     }
 
     func togglePomodoro() {
-        if state.timerDeadline != nil {
-            state.timerDeadline = nil
-        } else {
+        let starting = state.timerDeadline == nil
+        if starting {
             state.timerDeadline = Date().addingTimeInterval(25 * 60)
+            state.timerTotal = 25 * 60
+        } else {
+            state.timerDeadline = nil
         }
+        runFocusShortcut(starting ? "开勿扰" : "关勿扰")
         refreshLayout()
+        bounce(starting: starting)
+    }
+
+    /// 可选系统勿扰桥：macOS 26 上第三方读不到系统专注/勿扰状态（Assertions.json 已废弃、
+    /// 控制中心 AX 封锁、SDK 无公开 API），但 Shortcuts CLI 可以驱动它。用户若创建了
+    /// 名为「开勿扰」/「关勿扰」的快捷指令（各含一个"设置专注模式"动作），岛开关专注时
+    /// 会同步调起；没有则静默跳过，零配置不影响使用。
+    private func runFocusShortcut(_ name: String) {
+        DispatchQueue.global(qos: .utility).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
+            process.arguments = ["run", name]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus != 0 {
+                    Self.debugLog("focus shortcut '\(name)' not present or failed (\(process.terminationStatus))")
+                }
+            } catch {
+                Self.debugLog("focus shortcut '\(name)' spawn error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// 专注开始的小交互：把弹簧目标临时推高 30pt，弹簧接近时由 springStep 拉回真实目标，
+    /// 岛体先弹出 ~24pt 再回落，幅度确定、肉眼明显。停止方向本身即快速收拢 +
+    /// 专注行缩放退场，不再叠加。宽度变化由居中公式自动保持居中。
+    private func bounce(starting: Bool) {
+        guard starting else { return }
+        popActive = true
+        targetW += 30
+        startSpring()
     }
 
     func musicControl(_ command: MusicCommand) {
@@ -734,7 +853,7 @@ final class IslandController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         let timer = NSMenuItem(
-            title: state.timerDeadline == nil ? "开始 25 分钟专注" : "停止专注计时",
+            title: state.timerDeadline == nil ? "开始专注 · 勿扰 25 分钟" : "停止专注 · 勿扰",
             action: #selector(menuTogglePomodoro),
             keyEquivalent: ""
         )
@@ -762,6 +881,19 @@ final class IslandController: NSObject, NSMenuDelegate {
         hud.state = mediaKeyTap.isRunning ? .on : .off
         menu.addItem(hud)
 
+        let agent = NSMenuItem(title: "Agent 状态岛", action: #selector(menuToggleAgent), keyEquivalent: "")
+        agent.target = self
+        agent.state = agentEnabled ? .on : .off
+        menu.addItem(agent)
+
+        let bridge = NSMenuItem(
+            title: AgentBridge.isInstalled ? "ZCode 状态桥（已连接）" : "安装 ZCode 状态桥…",
+            action: #selector(menuToggleBridge),
+            keyEquivalent: ""
+        )
+        bridge.target = self
+        menu.addItem(bridge)
+
         menu.addItem(.separator())
 
         let login = NSMenuItem(title: "开机自启动", action: #selector(menuToggleLogin), keyEquivalent: "")
@@ -788,6 +920,25 @@ final class IslandController: NSObject, NSMenuDelegate {
 
     @objc private func menuToggleExpand() { toggleExpanded() }
     @objc private func menuTogglePomodoro() { togglePomodoro() }
+
+    @objc private func menuToggleAgent() {
+        agentEnabled.toggle()
+        if agentEnabled {
+            startAgentStore()
+        } else {
+            agentStore.stop()
+            state.agentSessions = []
+        }
+        refreshLayout()
+    }
+
+    @objc private func menuToggleBridge() {
+        let mode = AgentBridge.isInstalled ? "uninstall" : "install"
+        let output = AgentBridge.run(mode).trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = mode == "install" ? "状态桥已安装" : "状态桥已卸载"
+        Self.debugLog("bridge \(mode): \(output)")
+        showToast(Activity(kind: .agent, text: text, until: Date().addingTimeInterval(3)))
+    }
 
     @objc private func menuToggleLyrics() {
         showLyrics.toggle()
@@ -837,7 +988,7 @@ final class IslandController: NSObject, NSMenuDelegate {
     @objc private func menuAbout() {
         let alert = NSAlert()
         alert.messageText = "灵动岛 NotchIsland"
-        alert.informativeText = "把 MacBook 的刘海变成 iPhone 灵动岛。\n版本 0.1.0 · 本地构建"
+        alert.informativeText = "把 MacBook 的刘海变成 iPhone 灵动岛。\n版本 0.3.0 · 本地构建"
         alert.runModal()
     }
 

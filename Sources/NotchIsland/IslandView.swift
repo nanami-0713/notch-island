@@ -12,9 +12,12 @@ struct IslandView: View {
                     .transition(.opacity)
             } else if let ext = state.extensionItem {
                 collapsedRow(ext)
-                    .transition(.opacity)
+                    .transition(.scale(scale: 0.92, anchor: .center).combined(with: .opacity))
             } else if state.music != nil {
                 musicCollapsedRow
+                    .transition(.opacity)
+            } else if !state.agentSessions.isEmpty {
+                agentCollapsedRow
                     .transition(.opacity)
             }
         }
@@ -34,7 +37,8 @@ struct IslandView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// 收起态音乐：左侧小封面、右侧随音乐律动的声纹（颜色取自封面主色调）
+    /// 收起态音乐：左侧小封面、右侧随音乐律动的声纹（颜色取自封面主色调）；
+    /// 有 agent 等批准时左翼最外侧亮 4pt 注意点（岛被音乐占用，但有事等你）
     private var musicCollapsedRow: some View {
         let np = state.music
         return ZStack {
@@ -62,26 +66,82 @@ struct IslandView: View {
             EqualizerView(tint: np?.tint ?? .white, playing: np?.playing ?? false)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
                 .padding(.trailing, 8)
+
+            if state.agentNeedsAttention {
+                attentionDot
+            }
         }
     }
 
+    /// 左翼最外侧的 4pt 注意点：有会话在等批准、但收起态被其他内容占用时的最低调通报
+    private var attentionDot: some View {
+        Circle()
+            .fill(Color.white)
+            .frame(width: 4, height: 4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(.leading, 3)
+    }
+
+    /// 收起态 agent：左翼 terminal 符号 + 主会话项目名，右翼呼吸点 + 时长（音乐岛同构）
+    private var agentCollapsedRow: some View {
+        let primary = AgentSession.primary(of: state.agentSessions)
+            ?? state.agentSessions[0]
+        let anyBusy = state.agentSessions.contains { $0.phase.isBusy }
+        return AgentCollapsedRow(session: primary, anyBusy: anyBusy)
+    }
+
     /// 收起态：刘海左侧小图标、右侧文字，模拟灵动岛的双活动布局
-    /// 窗口是非对称贴边的（图标/文字各距刘海 10pt），两侧留白恒为 sideGap+edgeMargin=12pt
+    /// 双翼对称布局下两翼等宽，留白恒为 sideGap+edgeMargin=20pt
+    @ViewBuilder
     private func collapsedRow(_ ext: IslandExtension) -> some View {
-        ZStack {
-            Image(systemName: ext.symbol)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Color.white.opacity(0.9))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .padding(.leading, 12)
-            Text(ext.text)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.white)
-                .lineLimit(1)
-                .fixedSize()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-                .padding(.trailing, 12)
+        if let progress = ext.progress {
+            timerCollapsedRow(ext, progress: progress)
+        } else {
+            ZStack {
+                Image(systemName: ext.symbol)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .padding(.leading, 12)
+                Text(ext.text)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                    .padding(.trailing, 12)
+                if state.agentNeedsAttention {
+                    attentionDot
+                }
+            }
         }
+    }
+
+    /// 专注模式收起态：最左侧「🌙 月亮」提醒勿扰中 + 倒计时，右侧迷你环形进度；
+    /// 绿色点缀呼应专注，数字等宽避免跳动
+    private func timerCollapsedRow(_ ext: IslandExtension, progress: Double) -> some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: "moon.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.green)
+                Text(ext.text)
+                    .font(.system(size: 12, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.white)
+            }
+            Spacer(minLength: 8)
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.16), lineWidth: 2.5)
+                Circle()
+                    .trim(from: 0, to: max(0.02, progress))
+                    .stroke(Color.green, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: 16, height: 16)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - 展开态
@@ -98,10 +158,14 @@ struct IslandView: View {
             if let np = state.music {
                 musicCard(np)
             }
+            if !state.agentSessions.isEmpty {
+                agentCard
+            }
             if !state.stashed.isEmpty {
                 stashCard
             }
-            if state.music == nil && state.timerDeadline == nil && state.stashed.isEmpty {
+            if state.music == nil && state.timerDeadline == nil && state.stashed.isEmpty
+                && state.agentSessions.isEmpty {
                 emptyHint
             }
         }
@@ -153,6 +217,21 @@ struct IslandView: View {
         case 51...: return .green
         case 21...50: return .orange
         default: return .red
+        }
+    }
+
+    /// 展开态 agent 卡：小标题 + 会话行（复用 M1 的 AgentExpandedCard，含 >3 折叠）
+    private var agentCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.7))
+                Text("Agent 会话")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.7))
+            }
+            AgentExpandedCard(sessions: state.agentSessions)
         }
     }
 
@@ -220,16 +299,36 @@ struct IslandView: View {
     }
 
     private var timerCard: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "timer")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color.white)
-                .frame(width: 34, height: 34)
-                .background(Circle().fill(Color.white.opacity(0.12)))
-            Text(Self.format(state.timerRemaining))
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(Color.white)
+        let progress = state.timerTotal > 0
+            ? min(max(1 - state.timerRemaining / state.timerTotal, 0), 1)
+            : 0
+        return HStack(spacing: 14) {
+            // 环形进度：绿色进度环，倒计时嵌在环心
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.14), lineWidth: 4)
+                Circle()
+                    .trim(from: 0, to: max(0.02, progress))
+                    .stroke(Color.green, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Text(Self.format(state.timerRemaining))
+                    .font(.system(size: 11.5, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.white)
+            }
+            .frame(width: 48, height: 48)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    Image(systemName: "moon.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.green)
+                    Text("专注模式")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                }
+                Text("结束于 \(Self.clock(state.timerDeadline)) · 共 \(Int(state.timerTotal / 60)) 分钟")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.45))
+            }
             Spacer()
             Button {
                 state.controller?.togglePomodoro()
@@ -369,6 +468,17 @@ struct IslandView: View {
     static func format(_ interval: TimeInterval) -> String {
         let total = max(0, Int(interval.rounded(.down)))
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private static let clockFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
+    static func clock(_ date: Date?) -> String {
+        guard let date else { return "--:--" }
+        return clockFormatter.string(from: date)
     }
 }
 

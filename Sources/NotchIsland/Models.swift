@@ -26,7 +26,7 @@ struct NowPlaying: Equatable {
 
 struct Activity: Equatable {
     enum Kind {
-        case clipboard, battery, timerDone, volume, brightness, headphone
+        case clipboard, battery, timerDone, volume, brightness, headphone, agent
     }
 
     var kind: Kind
@@ -52,6 +52,7 @@ struct Activity: Equatable {
         case .volume: return "speaker.wave.2.fill"
         case .brightness: return "sun.max.fill"
         case .headphone: return "headphones"
+        case .agent: return "terminal"
         }
     }
 }
@@ -61,6 +62,8 @@ struct IslandExtension: Equatable {
     var symbol: String
     var text: String
     var textWidth: CGFloat
+    /// 计时进度 0~1（专注模式专用）：非 nil 时收起态改用「左侧图标+倒计时、右侧迷你进度条」布局
+    var progress: Double?
 }
 
 @MainActor
@@ -71,9 +74,18 @@ final class IslandState: ObservableObject {
     @Published var extensionItem: IslandExtension?
     @Published var timerDeadline: Date?
     @Published var timerRemaining: Double = 0
+    /// 本次专注的总时长（收起态迷你进度条的分母）
+    var timerTotal: TimeInterval = 25 * 60
     @Published var currentWidth: CGFloat = 0
     @Published var stashed: [StashedFile] = []
     @Published var lyricLine: String?
+    /// Agent 状态岛：只含「正在干活 / 等待批准」的会话（过滤规则见 AgentSession.isDisplayed）
+    @Published var agentSessions: [AgentSession] = []
+
+    /// 有会话在等批准但收起态正被音乐/计时等内容占用时，左翼最外侧亮 4pt 注意点
+    var agentNeedsAttention: Bool {
+        agentSessions.contains { $0.phase == .permissionPending }
+    }
 
     var notchWidth: CGFloat = 179
     var notchHeight: CGFloat = 32
