@@ -31,9 +31,15 @@ final class AgentEventStore {
     /// 进程监控最新结果：进程不在 + 长时间无事件 = 会话已死，可清理鬼影
     private var agentAlive = false
 
-    /// macOS 的 cachesDirectory 恒为 ~/Library/Caches，直接拼路径避免抛错 API 进静态初始化
-    static let defaultEventsURL = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent("Library/Caches/agent-island/events.jsonl")
+    /// 与 scripts/agent-hook.sh 的写入路径严格一致：${XDG_CACHE_HOME:-~/.cache}/agent-island/events.jsonl。
+    /// 注意不是 macOS 惯用的 ~/Library/Caches——钩子走 XDG 约定，两侧必须同源，
+    /// 否则桥在写、app 在读另一个空目录，agent 状态永远不上岛（v0.3.0 实测踩坑）
+    static let defaultEventsURL: URL = {
+        let base = ProcessInfo.processInfo.environment["XDG_CACHE_HOME"]
+            .map { URL(fileURLWithPath: $0) }
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".cache")
+        return base.appendingPathComponent("agent-island/events.jsonl")
+    }()
 
     init(eventsURL: URL = AgentEventStore.defaultEventsURL) {
         self.eventsURL = eventsURL
@@ -124,8 +130,12 @@ final class AgentEventStore {
         if let p = ev.project, !p.isEmpty { s.project = p }
         s.lastEventAt = date
         switch ev.event {
-        case "SessionStart", "UserPromptSubmit":
+        case "UserPromptSubmit":
             s.phase = .thinking
+        case "SessionStart":
+            // 打开 ZCode 桌面端会给最近会话批量补发 SessionStart(实测一次 5 条),
+            // 用户并未发指令——只响铃不干活,停靠不上岛,首条 UserPromptSubmit/工具调用才亮
+            s.phase = .waitingInput
         case "PreToolUse":
             s.phase = .running((ev.tool?.isEmpty == false) ? ev.tool! : "Tool")
         case "PermissionRequest":
@@ -226,6 +236,11 @@ enum AgentSelfTest {
         feed(#"{"ts":400,"event":"Stop","session_id":"a","tool":"","project":"alpha"}"#)
         expect("全部停靠 → 岛消失", store.displayedSessions().isEmpty)
         expect("主会话选择对空列表返回 nil", AgentSession.primary(of: []) == nil)
+
+        feed(#"{"ts":500,"event":"SessionStart","session_id":"c","tool":"","project":"gamma"}"#)
+        expect("仅 SessionStart 不上岛(桌面端启动会批量补发)", store.displayedSessions().allSatisfy { $0.id != "c" })
+        feed(#"{"ts":510,"event":"UserPromptSubmit","session_id":"c","tool":"","project":"gamma"}"#)
+        expect("用户开口后才上岛", store.displayedSessions().contains { $0.id == "c" })
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         return failures == 0

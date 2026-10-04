@@ -205,9 +205,15 @@ final class IslandController: NSObject, NSMenuDelegate {
     // MARK: - 布局
 
     func refreshLayout() {
-        let ext = extensionContent()
-        state.extensionItem = ext
-        let target = targetFrame(ext: ext)
+        // 收起态五行内容源（显示与尺寸的优先级在 targetFrame/IslandView 里必须一致）：
+        // 瞬时动态 > Agent > 音乐 > 专注 > 暂存
+        let activity = activityExtension()
+        let timer = timerExtension()
+        let stash = stashExtension()
+        if state.extensionItem != activity { state.extensionItem = activity }
+        if state.timerItem != timer { state.timerItem = timer }
+        if state.stashItem != stash { state.stashItem = stash }
+        let target = targetFrame()
         state.currentWidth = target.width
         animate(to: target)
     }
@@ -311,7 +317,7 @@ final class IslandController: NSObject, NSMenuDelegate {
         }
     }
 
-    private func targetFrame(ext: IslandExtension?) -> NSRect {
+    private func targetFrame() -> NSRect {
         let screen = geometry.screen
         if state.expanded {
             let width: CGFloat = 340
@@ -350,33 +356,19 @@ final class IslandController: NSObject, NSMenuDelegate {
             return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
         }
 
-        // 非对称贴边布局（alcove 同款）：窗口左缘 = 刘海左 - 图标翼展，右缘 = 刘海右 + 文本翼展，
-        // 图标/文字各自紧贴刘海两侧 10pt，任何内容都不会钻进刘海底下
-        // 非对称贴边布局（alcove 同款），三种收起模式：
-        // 文本（计时/动态）：左图标、右文字；音乐：左封面 22、右声纹；空闲：纯刘海 + 24pt 边距
+        // 收起态五行优先级（与 IslandView 显示分支严格一致）：
+        // 瞬时动态 > Agent > 音乐 > 专注 > 暂存，全部双翼等宽居中
         let sideGap: CGFloat = 8
         let edgeMargin: CGFloat = 12
         let notchLeft = screen.frame.midX - geometry.notchWidth / 2
 
         let leftExtent: CGFloat
         let rightExtent: CGFloat
-        if let ext {
-            // 左右对称：两翼等宽（取两侧内容较大者 + 边距），文字超长已在 extensionContent 截断
-            if ext.progress != nil {
-                // 专注模式：最左「月亮+倒计时」、右侧迷你环形进度，两翼取较大内容等宽
-                let sideW = max(sideGap + 12 + 5 + ext.textWidth + edgeMargin,
-                                sideGap + 16 + edgeMargin)
-                leftExtent = sideW
-                rightExtent = sideW
-            } else {
-                let sideW = max(14, ext.textWidth) + sideGap + edgeMargin
-                leftExtent = sideW
-                rightExtent = sideW
-            }
-        } else if state.music != nil {
-            // 音乐：左右翼精确镜像（各 8 + 22 + 8），岛体居中、双翼对称
-            leftExtent = sideGap + 22 + 8
-            rightExtent = sideGap + 22 + 8
+        if let ext = state.extensionItem {
+            // 瞬时动态：左图标、右文字，两翼取较大内容等宽（文字已在 activityExtension 截断）
+            let sideW = max(14, ext.textWidth) + sideGap + edgeMargin
+            leftExtent = sideW
+            rightExtent = sideW
         } else if !state.agentSessions.isEmpty,
                   let primary = AgentSession.primary(of: state.agentSessions) {
             // Agent：左翼符号+项目名、右翼呼吸点+时长，双翼取较大内容等宽（音乐岛同构）
@@ -385,6 +377,21 @@ final class IslandController: NSObject, NSMenuDelegate {
             let left = 11 + 5 + Self.textWidth(project)                    // 符号 + 间距 + 项目名
             let right = 19 + 6 + Self.textWidth(timeText)                  // 三呼吸点 19pt + 间距 + 时长
             let sideW = max(left, right) + sideGap + edgeMargin
+            leftExtent = sideW
+            rightExtent = sideW
+        } else if state.music != nil {
+            // 音乐：左右翼精确镜像（各 8 + 22 + 8），岛体居中、双翼对称
+            leftExtent = sideGap + 22 + 8
+            rightExtent = sideGap + 22 + 8
+        } else if let timer = state.timerItem {
+            // 专注：最左「月亮+倒计时」、右侧迷你环形进度，两翼取较大内容等宽
+            let sideW = max(sideGap + 12 + 5 + timer.textWidth + edgeMargin,
+                            sideGap + 16 + edgeMargin)
+            leftExtent = sideW
+            rightExtent = sideW
+        } else if let stash = state.stashItem {
+            // 暂存角标：图标 + 文字，同瞬时动态布局
+            let sideW = max(14, stash.textWidth) + sideGap + edgeMargin
             leftExtent = sideW
             rightExtent = sideW
         } else {
@@ -402,26 +409,34 @@ final class IslandController: NSObject, NSMenuDelegate {
         )
     }
 
-    /// 展开态优先级：计时 > 临时动态 > 暂存角标 > 音乐
-    private func extensionContent() -> IslandExtension? {
+    /// 瞬时动态（收起态第 1 行，秒级闪现）：剪贴板/电量/音量/耳机等操作反馈。
+    /// 排最前是因为它们是用户刚做出的动作的即时反馈，短暂覆盖持久状态行后立即让位
+    private func activityExtension() -> IslandExtension? {
         if state.expanded { return nil }
-        if let deadline = state.timerDeadline {
-            let remain = max(0, deadline.timeIntervalSinceNow)
-            let text = Self.formatCountdown(remain)
-            let progress = state.timerTotal > 0 ? 1 - remain / state.timerTotal : 0
-            return IslandExtension(symbol: "timer", text: text, textWidth: Self.textWidth(text),
-                                   progress: min(max(progress, 0), 1))
-        }
         if let activity = state.activity, activity.until > Date() {
             let text = Self.clampText(activity.text)
             return IslandExtension(symbol: activity.symbol, text: text, textWidth: Self.textWidth(text))
         }
-        if !state.stashed.isEmpty {
-            let text = Self.clampText("\(state.stashed.count) 个文件")
-            return IslandExtension(symbol: "tray.full.fill", text: text, textWidth: Self.textWidth(text))
-        }
-        // 音乐收起态改用「封面 + 声纹」视图，不再用文字
         return nil
+    }
+
+    /// 专注倒计时（收起态第 4 行，优先级低于 agent 与音乐）
+    private func timerExtension() -> IslandExtension? {
+        if state.expanded { return nil }
+        guard let deadline = state.timerDeadline else { return nil }
+        let remain = max(0, deadline.timeIntervalSinceNow)
+        let text = Self.formatCountdown(remain)
+        let progress = state.timerTotal > 0 ? 1 - remain / state.timerTotal : 0
+        return IslandExtension(symbol: "timer", text: text, textWidth: Self.textWidth(text),
+                               progress: min(max(progress, 0), 1))
+    }
+
+    /// 文件暂存角标（收起态第 5 行）
+    private func stashExtension() -> IslandExtension? {
+        if state.expanded { return nil }
+        guard !state.stashed.isEmpty else { return nil }
+        let text = Self.clampText("\(state.stashed.count) 个文件")
+        return IslandExtension(symbol: "tray.full.fill", text: text, textWidth: Self.textWidth(text))
     }
 
     /// 收起态文字翼上限 64pt：双翼对称布局下文字过长会把岛撑得过宽，超长截断加省略号

@@ -71,7 +71,12 @@ final class IslandState: ObservableObject {
     @Published var expanded = false
     @Published var music: NowPlaying?
     @Published var activity: Activity?
+    /// 收起态第 1 行：瞬时动态（剪贴板/音量/电量等，秒级闪现后让位）
     @Published var extensionItem: IslandExtension?
+    /// 收起态第 4 行：专注倒计时（月亮 + 迷你进度环）
+    @Published var timerItem: IslandExtension?
+    /// 收起态第 5 行：文件暂存角标
+    @Published var stashItem: IslandExtension?
     @Published var timerDeadline: Date?
     @Published var timerRemaining: Double = 0
     /// 本次专注的总时长（收起态迷你进度条的分母）
@@ -82,7 +87,7 @@ final class IslandState: ObservableObject {
     /// Agent 状态岛：只含「正在干活 / 等待批准」的会话（过滤规则见 AgentSession.isDisplayed）
     @Published var agentSessions: [AgentSession] = []
 
-    /// 有会话在等批准但收起态正被音乐/计时等内容占用时，左翼最外侧亮 4pt 注意点
+    /// 有会话在等批准但收起态正被瞬时动态（第 1 行）占用时，左翼最外侧亮 4pt 注意点
     var agentNeedsAttention: Bool {
         agentSessions.contains { $0.phase == .permissionPending }
     }

@@ -13,16 +13,24 @@ struct IslandView: View {
             } else if let ext = state.extensionItem {
                 collapsedRow(ext)
                     .transition(.scale(scale: 0.92, anchor: .center).combined(with: .opacity))
+            } else if !state.agentSessions.isEmpty {
+                agentCollapsedRow
+                    .transition(.opacity)
             } else if state.music != nil {
                 musicCollapsedRow
                     .transition(.opacity)
-            } else if !state.agentSessions.isEmpty {
-                agentCollapsedRow
+            } else if let timer = state.timerItem {
+                collapsedRow(timer)
+                    .transition(.scale(scale: 0.92, anchor: .center).combined(with: .opacity))
+            } else if let stash = state.stashItem {
+                collapsedRow(stash)
                     .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.28), value: state.expanded)
         .animation(.easeOut(duration: 0.28), value: state.extensionItem)
+        .animation(.easeOut(duration: 0.28), value: state.timerItem)
+        .animation(.easeOut(duration: 0.28), value: state.stashItem)
     }
 
     private var background: some View {

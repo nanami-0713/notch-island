@@ -49,6 +49,9 @@ final class NowPlayingMonitor {
     private var rawLogCount = 0
     private var helperAvailable = true
     private var helperFailures = 0
+    /// 上一发 `get --now` 还没回来时不叠加新实例：并发多个适配器可能互相干扰
+    /// MediaRemote 的共享会话（实测疑似会冲掉"定格"数据）
+    private var fetchInFlight = false
     private var musicApps: [MusicApp] = []
     private var lastAppBundleID: String?
     private var lastSource: Source = .helper
@@ -126,9 +129,16 @@ final class NowPlayingMonitor {
 
     private func tick() {
         tickCount += 1
-        guard helperAvailable else {
-            pollAppleScript()
-            return
+        if !helperAvailable {
+            // AppleScript 兜底期间每 5 分钟重试一次助手：一次抖动（3 连败）不该永久失去
+            // 封面与酷狗支持（酷狗无脚本词典，AppleScript 兜底对它无能为力）；
+            // 重试若再失败 3 次会再次降级，代价可控
+            guard tickCount % 300 == 0 else {
+                pollAppleScript()
+                return
+            }
+            helperAvailable = true
+            helperFailures = 0
         }
         // get 每 2 秒一次；启动先拍一发
         if tickCount == 1 || tickCount % 2 == 0 {
@@ -163,6 +173,8 @@ final class NowPlayingMonitor {
         if rawLogCount == 0 {
             IslandController.debugLog("fetchGet spawn perl=\(helperPerl) fw=\(helperFramework)")
         }
+        guard !fetchInFlight else { return }
+        fetchInFlight = true
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
@@ -198,6 +210,7 @@ final class NowPlayingMonitor {
                 MainActor.assumeIsolated {
                     guard let self, !finished else { return }
                     finished = true
+                    self.fetchInFlight = false
                     self.handleGetOutput(output)
                 }
             }
@@ -205,6 +218,7 @@ final class NowPlayingMonitor {
         do {
             try process.run()
         } catch {
+            fetchInFlight = false
             helperFail(handleError: error.localizedDescription)
             return
         }
@@ -216,6 +230,7 @@ final class NowPlayingMonitor {
                 MainActor.assumeIsolated {
                     guard let self, !finished else { return }
                     finished = true
+                    self.fetchInFlight = false
                     self.helperFail(handleError: "get timed out after 10s")
                 }
             }
@@ -273,6 +288,15 @@ final class NowPlayingMonitor {
         let duration = payload["duration"] as? Double ?? 0
         let position = payload["elapsedTimeNow"] as? Double ?? payload["elapsedTime"] as? Double ?? 0
         let rate = payload["playbackRate"] as? Double ?? 0
+
+        // 幽灵曲目防御：MediaRemote 会话在播放器退出后会"定格"残留（实测一首暂停曲目
+        // 挂了 4 天，播放器早已退出）——上报方已不在运行且暂停 → 视为无音乐。
+        // 在放（rate>0）时不做此判断：在放即真实；上报方未知（无 bundleID）时保持旧行为
+        if rate <= 0, let bundleID, !bundleID.isEmpty,
+           NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
+            apply(nil)
+            return
+        }
 
         var artwork = lastArtworkImage
         var tint = lastArtworkTint
